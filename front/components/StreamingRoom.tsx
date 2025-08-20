@@ -49,9 +49,9 @@ export function StreamingRoom() {
     isLive: true
   };
 
-  // 목 WebSocket 연결 시뮬레이션
+  // WebSocket 연결
   useEffect(() => {
-    // 초기 시청자 목록
+    // 초기 시청자 목록 (목업)
     const initialViewers: Viewer[] = [
       { id: '1', username: 'gamer01', avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=40&h=40&fit=crop&crop=face', isFollowing: true },
       { id: '2', username: 'viewer123', avatar: 'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=40&h=40&fit=crop&crop=face', isFollowing: false },
@@ -60,45 +60,80 @@ export function StreamingRoom() {
     ];
     setViewers(initialViewers);
 
-    // 초기 채팅 메시지
+    // 초기 메시지 (스트리머 안내)
     const initialMessages: ChatMessage[] = [
-      { id: '1', username: 'streamerking', message: '안녕하세요! 오늘도 재미있게 방송해보겠습니다!', timestamp: new Date(Date.now() - 300000), isOwner: true },
-      { id: '2', username: 'gamer01', message: '오늘 뭐 할 예정이에요?', timestamp: new Date(Date.now() - 240000) },
-      { id: '3', username: 'chatmaster', message: '팔로우 했어요! 항상 재미있는 방송 감사합니다 ❤️', timestamp: new Date(Date.now() - 180000) },
+      { id: '1', username: 'streamerking', message: '안녕하세요! 오늘도 재미있게 방송해보겠습니다!', timestamp: new Date(Date.now() - 300000), isOwner: true }
     ];
     setMessages(initialMessages);
 
-    // 목 메시지 생성 시뮬레이션
-    const messageInterval = setInterval(() => {
-      const mockMessages = [
-        '와 대박!',
-        '이거 어떻게 하는 거예요?',
-        'ㅋㅋㅋㅋㅋ',
-        '팔로우 완료!',
-        '스킬 개쩐다',
-        '다음엔 뭐 할 예정인가요?',
-        '오늘 방송 너무 재밌어요!',
-        '구독 눌렀습니다!',
-        '화이팅!',
-        '대단하네요 👍'
-      ];
-      
-      const usernames = ['viewer789', 'gamer02', 'newbie', 'pro_player', 'fan123'];
-      const randomMessage = mockMessages[Math.floor(Math.random() * mockMessages.length)];
-      const randomUser = usernames[Math.floor(Math.random() * usernames.length)];
-      
-      const newMessage: ChatMessage = {
-        id: Date.now().toString(),
-        username: randomUser,
-        message: randomMessage,
-        timestamp: new Date()
-      };
-      
-      setMessages(prev => [...prev.slice(-49), newMessage]);
-    }, 3000 + Math.random() * 5000);
+    const getWebSocketUrl = () => {
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const { hostname, port } = window.location;
+        // 개발 서버(예: 5173, 3000 등)에서 실행 중이면 백엔드 기본 포트 8080으로 연결
+        if (hostname === 'localhost' || hostname === '127.0.0.1') {
+          if (port && port !== '8080') {
+            return `${protocol}://localhost:8080/ws/chat`;
+          }
+        }
+        // 동일 출처 배포 환경
+        return `${protocol}://${window.location.host}/ws/chat`;
+      } catch {
+        return 'ws://localhost:8080/ws/chat';
+      }
+    };
+
+    const socket = new WebSocket(getWebSocketUrl());
+    websocketRef.current = socket;
+
+    socket.onopen = () => {
+      // 연결 성공 시스템 메시지
+      setMessages(prev => [
+        ...prev,
+        { id: Date.now().toString(), username: 'system', message: '서버와 연결되었습니다.', timestamp: new Date() }
+      ]);
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'message' || data.type === 'system') {
+          const incoming: ChatMessage = {
+            id: data.id || Date.now().toString(),
+            username: data.username || 'anonymous',
+            message: data.message || '',
+            timestamp: data.timestamp ? new Date(data.timestamp) : new Date()
+          };
+          setMessages(prev => [...prev.slice(-99), incoming]);
+        } else if (data.type === 'follow') {
+          const incoming: ChatMessage = {
+            id: Date.now().toString(),
+            username: 'system',
+            message: `${data.username || 'anonymous'} 님이 팔로우했습니다.`,
+            timestamp: data.timestamp ? new Date(data.timestamp) : new Date()
+          };
+          setMessages(prev => [...prev.slice(-99), incoming]);
+        }
+      } catch (e) {
+        // 무시: 서버에서 텍스트가 아닌 데이터가 올 경우
+      }
+    };
+
+    socket.onerror = () => {
+      setMessages(prev => [
+        ...prev,
+        { id: Date.now().toString(), username: 'system', message: 'WebSocket 오류가 발생했습니다.', timestamp: new Date() }
+      ]);
+    };
+
+    socket.onclose = () => {
+      setMessages(prev => [
+        ...prev,
+        { id: Date.now().toString(), username: 'system', message: '서버 연결이 종료되었습니다.', timestamp: new Date() }
+      ]);
+    };
 
     return () => {
-      clearInterval(messageInterval);
       if (websocketRef.current) {
         websocketRef.current.close();
       }
@@ -112,12 +147,27 @@ export function StreamingRoom() {
       message,
       timestamp: new Date()
     };
+    // 낙관적 업데이트
     setMessages(prev => [...prev, newMessage]);
+
+    // 서버로 전송
+    try {
+      websocketRef.current?.send(
+        JSON.stringify({ type: 'message', username: currentUser.username, message })
+      );
+    } catch {
+      // 전송 실패시 무시
+    }
   };
 
   const handleFollow = () => {
-    setIsFollowing(!isFollowing);
-    // 실제 구현에서는 WebSocket을 통해 서버에 전송
+    const next = !isFollowing;
+    setIsFollowing(next);
+    try {
+      websocketRef.current?.send(
+        JSON.stringify({ type: 'follow', username: currentUser.username })
+      );
+    } catch {}
   };
 
   return (
